@@ -3,23 +3,26 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
-	"github.com/forbole/juno/v2/logging"
+	"github.com/cosmos/cosmos-sdk/x/authz"
+
+	"github.com/forbole/juno/v5/logging"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 
-	"github.com/forbole/juno/v2/database"
-	"github.com/forbole/juno/v2/types/config"
+	"github.com/forbole/juno/v5/database"
+	"github.com/forbole/juno/v5/types/config"
 
-	"github.com/forbole/juno/v2/modules"
+	"github.com/forbole/juno/v5/modules"
 
+	tmctypes "github.com/cometbft/cometbft/rpc/core/types"
+	tmtypes "github.com/cometbft/cometbft/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	tmctypes "github.com/tendermint/tendermint/rpc/core/types"
-	tmtypes "github.com/tendermint/tendermint/types"
 
-	"github.com/forbole/juno/v2/node"
-	"github.com/forbole/juno/v2/types"
-	"github.com/forbole/juno/v2/types/utils"
+	"github.com/forbole/juno/v5/node"
+	"github.com/forbole/juno/v5/types"
+	"github.com/forbole/juno/v5/types/utils"
 )
 
 // Worker defines a job consumer that is responsible for getting and
@@ -37,12 +40,12 @@ type Worker struct {
 }
 
 // NewWorker allows to create a new Worker implementation.
-func NewWorker(index int, ctx *Context) Worker {
+func NewWorker(ctx *Context, queue types.HeightQueue, index int) Worker {
 	return Worker{
 		index:   index,
-		codec:   ctx.Codec,
+		codec:   ctx.EncodingConfig.Codec,
 		node:    ctx.Node,
-		queue:   ctx.Queue,
+		queue:   queue,
 		db:      ctx.Database,
 		modules: ctx.Modules,
 		logger:  ctx.Logger,
@@ -53,10 +56,16 @@ func NewWorker(index int, ctx *Context) Worker {
 // given worker queue. Any failed job is logged and re-enqueued.
 func (w Worker) Start() {
 	logging.WorkerCount.Inc()
+	chainID, err := w.node.ChainID()
+	if err != nil {
+		w.logger.Error("error while getting chain ID from the node ", "err", err)
+	}
 
 	for i := range w.queue {
 		if err := w.ProcessIfNotExists(i); err != nil {
-			// re-enqueue any failed job
+			// re-enqueue any failed job after average block time
+			time.Sleep(config.GetAvgBlockTime())
+
 			// TODO: Implement exponential backoff or max retries for a block height.
 			go func() {
 				w.logger.Error("re-enqueueing failed block", "height", i, "err", err)
@@ -64,7 +73,7 @@ func (w Worker) Start() {
 			}()
 		}
 
-		logging.WorkerHeight.WithLabelValues(fmt.Sprintf("%d", w.index)).Set(float64(i))
+		logging.WorkerHeight.WithLabelValues(fmt.Sprintf("%d", w.index), chainID).Set(float64(i))
 	}
 }
 
@@ -122,6 +131,22 @@ func (w Worker) Process(height int64) error {
 	}
 
 	return w.ExportBlock(block, events, txs, vals)
+}
+
+// ProcessTransactions fetches transactions for a given height and stores them into the database.
+// It returns an error if the export process fails.
+func (w Worker) ProcessTransactions(height int64) error {
+	block, err := w.node.Block(height)
+	if err != nil {
+		return fmt.Errorf("failed to get block from node: %s", err)
+	}
+
+	txs, err := w.node.Txs(block)
+	if err != nil {
+		return fmt.Errorf("failed to get transactions for block: %s", err)
+	}
+
+	return w.ExportTxs(txs)
 }
 
 // HandleGenesis accepts a GenesisDoc and calls all the registered genesis handlers
@@ -242,46 +267,102 @@ func (w Worker) ExportCommit(commit *tmtypes.Commit, vals *tmctypes.ResultValida
 	return nil
 }
 
-// ExportTxs accepts a slice of transactions and persists then inside the database.
+// saveTx accepts the transaction and persists it inside the database.
 // An error is returned if the write fails.
-func (w Worker) ExportTxs(txs []*types.Tx) error {
-	// Handle all the transactions inside the block
-	for _, tx := range txs {
-		// Save the transaction itself
-		err := w.db.SaveTx(tx)
-		if err != nil {
-			return fmt.Errorf("failed to handle transaction with hash %s: %s", tx.TxHash, err)
-		}
+func (w Worker) saveTx(tx *types.Tx) error {
+	err := w.db.SaveTx(tx)
+	if err != nil {
+		return fmt.Errorf("failed to handle transaction with hash %s: %s", tx.TxHash, err)
+	}
+	return nil
+}
 
-		// Call the tx handlers
-		for _, module := range w.modules {
-			if transactionModule, ok := module.(modules.TransactionModule); ok {
-				err = transactionModule.HandleTx(tx)
-				if err != nil {
-					w.logger.TxError(module, tx, err)
-				}
-			}
-		}
-
-		// Handle all the messages contained inside the transaction
-		for i, msg := range tx.Body.Messages {
-			var stdMsg sdk.Msg
-			err = w.codec.UnpackAny(msg, &stdMsg)
+// handleTx accepts the transaction and calls the tx handlers.
+func (w Worker) handleTx(tx *types.Tx) {
+	// Call the tx handlers
+	for _, module := range w.modules {
+		if transactionModule, ok := module.(modules.TransactionModule); ok {
+			err := transactionModule.HandleTx(tx)
 			if err != nil {
-				return fmt.Errorf("error while unpacking message: %s", err)
+				w.logger.TxError(module, tx, err)
+			}
+		}
+	}
+}
+
+// handleMessage accepts the transaction and handles messages contained
+// inside the transaction.
+func (w Worker) handleMessage(index int, msg sdk.Msg, tx *types.Tx) {
+	// Allow modules to handle the message
+	for _, module := range w.modules {
+		if messageModule, ok := module.(modules.MessageModule); ok {
+			err := messageModule.HandleMsg(index, msg, tx)
+			if err != nil {
+				w.logger.MsgError(module, tx, msg, err)
+			}
+		}
+	}
+
+	// If it's a MsgExecute, we need to make sure the included messages are handled as well
+	if msgExec, ok := msg.(*authz.MsgExec); ok {
+		for authzIndex, msgAny := range msgExec.Msgs {
+			var executedMsg sdk.Msg
+			err := w.codec.UnpackAny(msgAny, &executedMsg)
+			if err != nil {
+				w.logger.Error("unable to unpack MsgExec inner message", "index", authzIndex, "error", err)
 			}
 
-			// Call the handlers
 			for _, module := range w.modules {
-				if messageModule, ok := module.(modules.MessageModule); ok {
-					err = messageModule.HandleMsg(i, stdMsg, tx)
+				if messageModule, ok := module.(modules.AuthzMessageModule); ok {
+					err = messageModule.HandleMsgExec(index, msgExec, authzIndex, executedMsg, tx)
 					if err != nil {
-						w.logger.MsgError(module, tx, stdMsg, err)
+						w.logger.MsgError(module, tx, executedMsg, err)
 					}
 				}
 			}
 		}
 	}
+}
+
+// ExportTxs accepts a slice of transactions and persists then inside the database.
+// An error is returned if the write fails.
+func (w Worker) ExportTxs(txs []*types.Tx) error {
+	// handle all transactions inside the block
+	for _, tx := range txs {
+		// save the transaction
+		err := w.saveTx(tx)
+		if err != nil {
+			return fmt.Errorf("error while storing txs: %s", err)
+		}
+
+		// call the tx handlers
+		w.handleTx(tx)
+
+		// handle all messages contained inside the transaction
+		sdkMsgs := make([]sdk.Msg, len(tx.Body.Messages))
+		for i, msg := range tx.Body.Messages {
+			var stdMsg sdk.Msg
+			err := w.codec.UnpackAny(msg, &stdMsg)
+			if err != nil {
+				return err
+			}
+			sdkMsgs[i] = stdMsg
+		}
+
+		// call the msg handlers
+		for i, sdkMsg := range sdkMsgs {
+			w.handleMessage(i, sdkMsg, tx)
+		}
+	}
+
+	totalBlocks := w.db.GetTotalBlocks()
+	logging.DbBlockCount.WithLabelValues("total_blocks_in_db").Set(float64(totalBlocks))
+
+	dbLatestHeight, err := w.db.GetLastBlockHeight()
+	if err != nil {
+		return err
+	}
+	logging.DbLatestHeight.WithLabelValues("db_latest_height").Set(float64(dbLatestHeight))
 
 	return nil
 }

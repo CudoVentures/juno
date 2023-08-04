@@ -3,10 +3,10 @@ package pruning
 import (
 	"fmt"
 
-	tmctypes "github.com/tendermint/tendermint/rpc/core/types"
+	tmctypes "github.com/cometbft/cometbft/rpc/core/types"
 
-	"github.com/forbole/juno/v2/database"
-	"github.com/forbole/juno/v2/types"
+	"github.com/forbole/juno/v5/database"
+	"github.com/forbole/juno/v5/types"
 )
 
 // HandleBlock implements modules.BlockModule

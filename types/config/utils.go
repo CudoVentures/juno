@@ -1,10 +1,8 @@
 package config
 
 import (
-	"io/ioutil"
 	"path"
-
-	"gopkg.in/yaml.v3"
+	"time"
 )
 
 var (
@@ -16,12 +14,11 @@ func GetConfigFilePath() string {
 	return path.Join(HomePath, "config.yaml")
 }
 
-// Write allows to write the given configuration into the file present at the given path
-func Write(cfg Config, path string) error {
-	bz, err := yaml.Marshal(&cfg)
-	if err != nil {
-		return err
+// GetAvgBlockTime returns the average_block_time in the configuration file or
+// returns 3 seconds if it is not configured
+func GetAvgBlockTime() time.Duration {
+	if Cfg.Parser.AvgBlockTime == nil {
+		return 3 * time.Second
 	}
-
-	return ioutil.WriteFile(path, bz, 0666)
+	return *Cfg.Parser.AvgBlockTime
 }

@@ -1,13 +1,13 @@
 package database
 
 import (
-	"github.com/cosmos/cosmos-sdk/simapp/params"
+	"cosmossdk.io/simapp/params"
 
-	"github.com/forbole/juno/v2/logging"
+	"github.com/forbole/juno/v5/logging"
 
-	databaseconfig "github.com/forbole/juno/v2/database/config"
+	databaseconfig "github.com/forbole/juno/v5/database/config"
 
-	"github.com/forbole/juno/v2/types"
+	"github.com/forbole/juno/v5/types"
 )
 
 // Database represents an abstract database that can be used to save data inside it
@@ -16,11 +16,21 @@ type Database interface {
 	// An error is returned if the operation fails.
 	HasBlock(height int64) (bool, error)
 
+	// GetLastBlockHeight returns the last block height stored in database..
+	// An error is returned if the operation fails.
+	GetLastBlockHeight() (int64, error)
+
+	// GetMissingHeights returns a slice of missing block heights between startHeight and endHeight
+	GetMissingHeights(startHeight, endHeight int64) []int64
+
 	// SaveBlock will be called when a new block is parsed, passing the block itself
 	// and the transactions contained inside that block.
 	// An error is returned if the operation fails.
 	// NOTE. For each transaction inside txs, SaveTx will be called as well.
 	SaveBlock(block *types.Block) error
+
+	// GetTotalBlocks returns total number of blocks stored in database.
+	GetTotalBlocks() int64
 
 	// SaveTx will be called to save each transaction contained inside a block.
 	// An error is returned if the operation fails.

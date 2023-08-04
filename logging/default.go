@@ -6,13 +6,13 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 
+	tmctypes "github.com/cometbft/cometbft/rpc/core/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	tmctypes "github.com/tendermint/tendermint/rpc/core/types"
 
-	"github.com/forbole/juno/v2/modules"
-	"github.com/forbole/juno/v2/types"
+	"github.com/forbole/juno/v5/modules"
+	"github.com/forbole/juno/v5/types"
 )
 
 var (
@@ -51,7 +51,6 @@ func (d *defaultLogger) SetLogFormat(format string) error {
 
 	case "text":
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-		break
 
 	default:
 		return fmt.Errorf("invalid logging format: %s", format)

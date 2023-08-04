@@ -3,11 +3,11 @@ package utils
 import (
 	"fmt"
 
+	abci "github.com/cometbft/cometbft/abci/types"
+	tmcrypto "github.com/cometbft/cometbft/crypto"
+	"github.com/cometbft/cometbft/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/bech32"
-	abci "github.com/tendermint/tendermint/abci/types"
-	tmcrypto "github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/types"
 )
 
 // ConvertValidatorAddressToBech32String converts the given validator address to its Bech32 string representation
@@ -44,10 +44,17 @@ func FindEventsByType(events []abci.Event, eventType string) []abci.Event {
 
 func FindAttributeByKey(event abci.Event, attrKey string) (abci.EventAttribute, error) {
 	for _, attr := range event.Attributes {
-		if string(attr.Key) == attrKey {
+		if attr.Key == attrKey {
 			return attr, nil
 		}
 	}
 
 	return abci.EventAttribute{}, fmt.Errorf("no attribute with key %s found inside event with type %s", attrKey, event.Type)
+}
+
+func MaxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }

@@ -3,10 +3,10 @@ package node
 import (
 	"context"
 
-	constypes "github.com/tendermint/tendermint/consensus/types"
-	tmctypes "github.com/tendermint/tendermint/rpc/core/types"
+	constypes "github.com/cometbft/cometbft/consensus/types"
+	tmctypes "github.com/cometbft/cometbft/rpc/core/types"
 
-	"github.com/forbole/juno/v2/types"
+	"github.com/forbole/juno/v5/types"
 )
 
 type Node interface {
@@ -19,6 +19,9 @@ type Node interface {
 	// LatestHeight returns the latest block height on the active chain. An error
 	// is returned if the query fails.
 	LatestHeight() (int64, error)
+
+	// ChainID returns the network ID
+	ChainID() (string, error)
 
 	// Validators returns all the known Tendermint validators for a given block
 	// height. An error is returned if the query fails.

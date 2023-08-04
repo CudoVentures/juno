@@ -1,98 +1,78 @@
-<!--
-Guiding Principles:
+## v5.0.0
+### Changes
+- Updated Cosmos SDK to `v0.47.2`
 
-Changelogs are for humans, not machines.
-There should be an entry for every single version.
-The same types of changes should be grouped.
-Versions and sections should be linkable.
-The latest version comes first.
-The release date of each version is displayed.
-Mention whether you follow Semantic Versioning.
+## v4.2.0
+### Changes
+- ([\#93](https://github.com/forbole/juno/pull/93)) Decode IBC transfer data to JSON for `/ibc.core.channel.v1.MsgRecvPacket` message
+- ([\#94](https://github.com/forbole/juno/pull/94)) Added TSL support when connecting to database
 
-Types of changes: 
+## v4.1.0
+### Changes
+- ([\#74](https://github.com/forbole/juno/pull/74)) Applied `GetMissingHeights()` in `enqueueMissingBlocks()` & in `parse blocks missing` cmd
+- ([\#88](https://github.com/forbole/juno/pull/88)) Added `juno_db_latest_height` metric to prometheus monitoring
 
-"Added" for new features.
-"Changed" for changes in existing functionality.
-"Deprecated" for soon-to-be removed features.
-"Removed" for now removed features.
-"Fixed" for any bug fixes.
-"Security" in case of vulnerabilities.
--->
+## v4.0.0
+### Changes
+- Updated Cosmos SDK to `v0.45.8`
+- ([\#74](https://github.com/forbole/juno/pull/74)) Added database block count to prometheus to improve alert monitoring
+- ([\#75](https://github.com/forbole/juno/pull/75)) Allow modules to handle MsgExec inner messages
+- ([\#76](https://github.com/forbole/juno/pull/76)) Return 0 as height for `GetLastBlockHeight()` method if there are no blocks saved in database
+- ([\#79](https://github.com/forbole/juno/pull/79)) Use `sqlx` instead of `sql` while dealing with a PostgreSQL database
+- ([\#83](https://github.com/forbole/juno/pull/83)) Bump `github.com/tendermint/tendermint` to `v0.34.22`
+- ([\#84](https://github.com/forbole/juno/pull/84)) Replace database configuration params with URI
+- ([\#86](https://github.com/forbole/juno/pull/86)) Revert concurrent handling of transactions and messages
 
-# Changelog
+## v3.4.0
+### Changes
+- ([\#71](https://github.com/forbole/juno/pull/71)) Retry RPC client connection upon failure instead of panic
+- ([\#72](https://github.com/forbole/juno/pull/72)) Updated missing blocks parsing 
+- ([\#73](https://github.com/forbole/juno/pull/73)) Re-enqueue failed block after average block time
 
-All notable changes to this project will be documented in this file.
+## v3.3.0
+### Changes
+- ([\#67](https://github.com/forbole/juno/pull/67)) Added support for concurrent transaction handling
+- ([\#69](https://github.com/forbole/juno/pull/69)) Added `ChainID` method to the `Node` type
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+## v3.2.1
+### Changes
+- ([\#68](https://github.com/forbole/juno/pull/68)) Added `chain_id` label to prometheus to improve alert monitoring 
 
-## [Unreleased]
+## v3.2.0
+### Changes
+- ([\#61](https://github.com/forbole/juno/pull/61)) Updated v3 migration code to handle database users names with a hyphen 
+- ([\#59](https://github.com/forbole/juno/pull/59)) Added `parse transactios` command to re-fetch missing or incomplete transactions
 
-## [0.0.6] - 2020-02-05
+## v3.1.1
+### Changes
+- Updated IBC to `v3.0.0`
 
-### Changed
+## v3.1.0
+### Changes
+- Allow to return any `WritableConfig` when initializing the configuration
 
-- Update SDK version to v0.37.6
+## v3.0.1
+### Changes
+- Updated IBC to `v2.2.0`
 
-### Fixed
+## v3.0.0
+#### Note
+Some changes included in this version are **breaking** due to the command renames. Extra precaution needs to be used when updating to this version.
 
-- Fixed Tendermint RPC connection by providing a manual HTTP read timeout.
-- Fixed `Pubkey` in the `signature` type to use the correct account Bech32 prefix.
-- Fixed `Address` in the `signature` type to use the correct account Bech32 prefix.
+### Migrating
+To migrate to this version you can run the following command: 
+```
+juno migrate v3
+```
 
-## [0.0.5] - 2019-12-12
+### Changes 
+#### CLI
+- Renamed the `parse` command to `start`
+- Renamed the `fix` command to `parse`
 
-- Update SDK version to v0.37.4
-- Update Tendermint version to v0.32.7
-- Cleanup Makefile and TravisCI config
+#### Database
+- Store transactions and messages inside partitioned tables
 
-## [0.0.4] - 2019-08-14
-
-### Changed
-
-- Update SDK version to v0.36.0
-  - The `transaction` schema now uses `events` instead of `tags`
-- Improved error messages and logs
-
-### Added
-
-- Add support for manual PostgreSQL SSL mode configuration
-- Add `version` command to display Juno version
-
-### Fixed
-
-- Fixed `db.OpenDB` to handle no password correctly
-
-## [0.0.3] - 2019-06-23
-
-### Fixed
-
-- Fixed logging in `Worker#Start`.
-
-## [0.0.2] - 2019-06-23
-
-### Added
-
-- Added additional indexes to the `pre_commit` table.
-
-### Changed
-
-- Updated `Database` to not check if a validator exists; use `ON CONFLICT DO NOTHING`
-instead.
-- Use `zerolog` logger with `--log-level` and `--log-format` CLI options over the
-stdlib `log` package.
-
-## [0.0.1] - 2019-06-21
-
-### Added
-
-- Initial release
-
-<!-- Release links -->
-
-[Unreleased]: https://github.com/fissionlabsio/juno/compare/v0.0.6...HEAD
-[0.0.6]: https://github.com/fissionlabsio/juno/releases/tag/v0.0.6
-[0.0.5]: https://github.com/fissionlabsio/juno/releases/tag/v0.0.5
-[0.0.4]: https://github.com/fissionlabsio/juno/releases/tag/v0.0.4
-[0.0.3]: https://github.com/fissionlabsio/juno/releases/tag/v0.0.3
-[0.0.2]: https://github.com/fissionlabsio/juno/releases/tag/v0.0.2
-[0.0.1]: https://github.com/fissionlabsio/juno/releases/tag/v0.0.1
+### New features
+#### CLI
+- Added a `genesis-file` subcommand to the `parse` command that allows you to parse the genesis file only

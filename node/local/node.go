@@ -5,44 +5,42 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path"
 	"sort"
+	"time"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	cfg "github.com/cometbft/cometbft/config"
+	cs "github.com/cometbft/cometbft/consensus"
+	"github.com/cometbft/cometbft/evidence"
+	"github.com/cometbft/cometbft/libs/log"
+	tmmath "github.com/cometbft/cometbft/libs/math"
+	tmquery "github.com/cometbft/cometbft/libs/pubsub/query"
+	"github.com/cometbft/cometbft/privval"
+	"github.com/cometbft/cometbft/proxy"
+	sm "github.com/cometbft/cometbft/state"
+	"github.com/cometbft/cometbft/state/indexer"
+	blockidxkv "github.com/cometbft/cometbft/state/indexer/block/kv"
+	blockidxnull "github.com/cometbft/cometbft/state/indexer/block/null"
+	"github.com/cometbft/cometbft/state/txindex"
+	"github.com/cometbft/cometbft/state/txindex/kv"
+	"github.com/cometbft/cometbft/state/txindex/null"
+	"github.com/cometbft/cometbft/store"
+	tmtypes "github.com/cometbft/cometbft/types"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/types/tx"
 	"github.com/spf13/viper"
-	cfg "github.com/tendermint/tendermint/config"
-	cs "github.com/tendermint/tendermint/consensus"
-	"github.com/tendermint/tendermint/evidence"
-	"github.com/tendermint/tendermint/libs/log"
-	tmmath "github.com/tendermint/tendermint/libs/math"
-	tmquery "github.com/tendermint/tendermint/libs/pubsub/query"
-	"github.com/tendermint/tendermint/privval"
-	"github.com/tendermint/tendermint/proxy"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/state/indexer"
-	blockidxkv "github.com/tendermint/tendermint/state/indexer/block/kv"
-	blockidxnull "github.com/tendermint/tendermint/state/indexer/block/null"
-	"github.com/tendermint/tendermint/state/txindex"
-	"github.com/tendermint/tendermint/state/txindex/kv"
-	"github.com/tendermint/tendermint/state/txindex/null"
-	"github.com/tendermint/tendermint/store"
-	tmtypes "github.com/tendermint/tendermint/types"
 
-	"github.com/forbole/juno/v2/node"
-	"github.com/forbole/juno/v2/types"
+	"github.com/forbole/juno/v5/node"
+	"github.com/forbole/juno/v5/types"
 
-	"path"
-	"time"
-
-	constypes "github.com/tendermint/tendermint/consensus/types"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmnode "github.com/tendermint/tendermint/node"
-	tmctypes "github.com/tendermint/tendermint/rpc/core/types"
-	dbm "github.com/tendermint/tm-db"
+	dbm "github.com/cometbft/cometbft-db"
+	constypes "github.com/cometbft/cometbft/consensus/types"
+	tmjson "github.com/cometbft/cometbft/libs/json"
+	tmnode "github.com/cometbft/cometbft/node"
+	tmctypes "github.com/cometbft/cometbft/rpc/core/types"
 )
 
 const (
@@ -99,7 +97,9 @@ func NewNode(config *Details, txConfig client.TxConfig, codec codec.Codec) (*Nod
 		return nil, err
 	}
 
-	stateStore := sm.NewStore(stateDB)
+	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
+		DiscardABCIResponses: false,
+	})
 
 	_, genDoc, err := tmnode.LoadStateFromDBOrGenesisDocProvider(stateDB, genesisDocProvider)
 	if err != nil {
@@ -121,16 +121,18 @@ func NewNode(config *Details, txConfig client.TxConfig, codec codec.Codec) (*Nod
 		return nil, err
 	}
 
-	proxyApp := proxy.NewAppConns(clientCreator)
+	csMetrics, _, _, smMetrics, proxyMetrics := metricsProvider(genDoc.ChainID)
 
-	csMetrics, _, _, smMetrics := metricsProvider(genDoc.ChainID)
+	proxyApp := proxy.NewAppConns(clientCreator, proxyMetrics)
 
 	evidenceDB, err := dbProvider(&tmnode.DBContext{ID: "evidence", Config: tmCfg})
 	if err != nil {
 		return nil, err
 	}
 
-	evidencePool, err := evidence.NewPool(evidenceDB, sm.NewStore(stateDB), blockStore)
+	evidencePool, err := evidence.NewPool(evidenceDB, sm.NewStore(stateDB, sm.StoreOptions{
+		DiscardABCIResponses: false,
+	}), blockStore)
 	if err != nil {
 		return nil, err
 	}
@@ -173,13 +175,13 @@ func NewNode(config *Details, txConfig client.TxConfig, codec codec.Codec) (*Nod
 
 func initDBs(config *cfg.Config, dbProvider tmnode.DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, err error) {
 	var blockStoreDB dbm.DB
-	blockStoreDB, err = dbProvider(&tmnode.DBContext{"blockstore", config})
+	blockStoreDB, err = dbProvider(&tmnode.DBContext{ID: "blockstore", Config: config})
 	if err != nil {
 		return
 	}
 	blockStore = store.NewBlockStore(blockStoreDB)
 
-	stateDB, err = dbProvider(&tmnode.DBContext{"state", config})
+	stateDB, err = dbProvider(&tmnode.DBContext{ID: "state", Config: config})
 	if err != nil {
 		return
 	}
@@ -210,7 +212,7 @@ func createAndStartIndexerService(
 
 	switch config.TxIndex.Indexer {
 	case "kv":
-		store, err := dbProvider(&tmnode.DBContext{"tx_index", config})
+		store, err := dbProvider(&tmnode.DBContext{ID: "tx_index", Config: config})
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -222,7 +224,7 @@ func createAndStartIndexerService(
 		blockIndexer = &blockidxnull.BlockerIndexer{}
 	}
 
-	indexerService := txindex.NewIndexerService(txIndexer, blockIndexer, eventBus)
+	indexerService := txindex.NewIndexerService(txIndexer, blockIndexer, eventBus, false)
 	indexerService.SetLogger(logger.With("module", "txindex"))
 
 	if err := indexerService.Start(); err != nil {
@@ -320,6 +322,11 @@ func (cp *Node) ConsensusState() (*constypes.RoundStateSimple, error) {
 // LatestHeight implements node.Node
 func (cp *Node) LatestHeight() (int64, error) {
 	return cp.blockStore.Height(), nil
+}
+
+// ChainID implements node.Node
+func (cp *Node) ChainID() (string, error) {
+	return cp.genesisDoc.ChainID, nil
 }
 
 // Validators implements node.Node
@@ -502,12 +509,12 @@ func (cp *Node) TxSearch(query string, pagePtr *int, perPagePtr *int, orderBy st
 	skipCount := validateSkipCount(page, perPage)
 	pageSize := tmmath.MinInt(perPage, totalCount-skipCount)
 
-	apiResults := make([]*ctypes.ResultTx, 0, pageSize)
+	apiResults := make([]*tmctypes.ResultTx, 0, pageSize)
 	for i := skipCount; i < skipCount+pageSize; i++ {
 		r := results[i]
 
 		var proof tmtypes.TxProof
-		apiResults = append(apiResults, &ctypes.ResultTx{
+		apiResults = append(apiResults, &tmctypes.ResultTx{
 			Hash:     tmtypes.Tx(r.Tx).Hash(),
 			Height:   r.Height,
 			Index:    r.Index,
@@ -517,7 +524,7 @@ func (cp *Node) TxSearch(query string, pagePtr *int, perPagePtr *int, orderBy st
 		})
 	}
 
-	return &ctypes.ResultTxSearch{Txs: apiResults, TotalCount: totalCount}, nil
+	return &tmctypes.ResultTxSearch{Txs: apiResults, TotalCount: totalCount}, nil
 }
 
 // SubscribeEvents implements node.Node

@@ -8,13 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cosmos/cosmos-sdk/simapp"
+	"cosmossdk.io/simapp/params"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/forbole/juno/v2/database"
-	databaseconfig "github.com/forbole/juno/v2/database/config"
-	postgres "github.com/forbole/juno/v2/database/postgresql"
-	"github.com/forbole/juno/v2/logging"
+	"github.com/forbole/juno/v5/database"
+	databaseconfig "github.com/forbole/juno/v5/database/config"
+	postgres "github.com/forbole/juno/v5/database/postgresql"
+	"github.com/forbole/juno/v5/logging"
 )
 
 func TestDatabaseTestSuite(t *testing.T) {
@@ -29,19 +29,19 @@ type DbTestSuite struct {
 
 func (suite *DbTestSuite) SetupTest() {
 	// Create the codec
-	codec := simapp.MakeTestEncodingConfig()
+	codec := params.MakeTestEncodingConfig()
 
 	// Build the database
 	dbCfg := databaseconfig.NewDatabaseConfig(
-		"bdjuno",
-		"localhost",
-		6433,
-		"bdjuno",
-		"password",
+		"postgres://bdjuno:password@localhost:6433/bdjuno?sslmode=disable&search_path=public",
+		"false",
 		"",
-		"public",
+		"",
+		"",
 		-1,
 		-1,
+		100000,
+		100,
 	)
 	db, err := postgres.Builder(database.NewContext(dbCfg, &codec, logging.DefaultLogger()))
 	suite.Require().NoError(err)
@@ -50,11 +50,11 @@ func (suite *DbTestSuite) SetupTest() {
 	suite.Require().True(ok)
 
 	// Delete the public schema
-	_, err = bigDipperDb.Sql.Exec(`DROP SCHEMA public CASCADE;`)
+	_, err = bigDipperDb.SQL.Exec(`DROP SCHEMA public CASCADE;`)
 	suite.Require().NoError(err)
 
 	// Re-create the schema
-	_, err = bigDipperDb.Sql.Exec(`CREATE SCHEMA public;`)
+	_, err = bigDipperDb.SQL.Exec(`CREATE SCHEMA public;`)
 	suite.Require().NoError(err)
 
 	dirPath := path.Join(".")
@@ -72,7 +72,7 @@ func (suite *DbTestSuite) SetupTest() {
 		commentsRegExp := regexp.MustCompile(`/\*.*\*/`)
 		requests := strings.Split(string(file), ";")
 		for _, request := range requests {
-			_, err := bigDipperDb.Sql.Exec(commentsRegExp.ReplaceAllString(request, ""))
+			_, err := bigDipperDb.SQL.Exec(commentsRegExp.ReplaceAllString(request, ""))
 			suite.Require().NoError(err)
 		}
 	}

@@ -1,12 +1,12 @@
 package pruning
 
 import (
-	"github.com/forbole/juno/v2/types/config"
+	"github.com/forbole/juno/v5/types/config"
 
-	"github.com/forbole/juno/v2/logging"
+	"github.com/forbole/juno/v5/logging"
 
-	"github.com/forbole/juno/v2/database"
-	"github.com/forbole/juno/v2/modules"
+	"github.com/forbole/juno/v5/database"
+	"github.com/forbole/juno/v5/modules"
 )
 
 var (
@@ -24,7 +24,12 @@ type Module struct {
 
 // NewModule builds a new Module instance
 func NewModule(cfg config.Config, db database.Database, logger logging.Logger) *Module {
-	pruningCfg, err := ParseConfig(cfg.GetBytes())
+	bz, err := cfg.GetBytes()
+	if err != nil {
+		panic(err)
+	}
+
+	pruningCfg, err := ParseConfig(bz)
 	if err != nil {
 		panic(err)
 	}
