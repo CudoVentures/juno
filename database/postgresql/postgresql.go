@@ -141,6 +141,36 @@ VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`
 	return err
 }
 
+// SaveBlockParsedData implements database.Database
+func (db *Database) SaveBlockParsedData(b *database.BlockParsedDataRow) error {
+	sqlStatement := `
+INSERT INTO block_parsed_data (height, validators, block, commits, txs, all_txs, block_modules, all_block_modules)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (height) DO UPDATE 
+	SET validators = excluded.validators,
+		block = excluded.block,
+		commits = excluded.commits,
+		txs = excluded.txs,
+		all_txs = excluded.all_txs,
+		block_modules = excluded.block_modules,
+		all_block_modules = excluded.all_block_modules`
+
+	_, err := db.SQL.Exec(sqlStatement,
+		b.Height, b.Validators, b.Block, b.Commits, b.Txs, b.AllTxs, b.BlockModules, b.AllBlockModules,
+	)
+	return err
+}
+
+// GetBlockParsedData implements database.Database
+func (db *Database) GetBlockParsedData(height int64) (*database.BlockParsedDataRow, error) {
+	stmt := `SELECT * FROM block_parsed_data WHERE height = $1`
+
+	b := database.BlockParsedDataRow{}
+	err := db.SQL.QueryRow(stmt, height).Scan(
+		&b.Height, &b.Validators, &b.Block, &b.Commits, &b.Txs, &b.AllTxs, &b.BlockModules, &b.AllBlockModules,
+	)
+	return &b, err
+}
+
 // GetTotalBlocks implements database.Database
 func (db *Database) GetTotalBlocks() int64 {
 	var blockCount int64

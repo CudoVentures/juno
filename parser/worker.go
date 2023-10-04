@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"database/sql"
+
 	"github.com/cosmos/cosmos-sdk/x/authz"
 
 	"github.com/forbole/juno/v5/logging"
@@ -86,12 +88,66 @@ func (w Worker) ProcessIfNotExists(height int64) error {
 		return fmt.Errorf("error while searching for block: %s", err)
 	}
 
-	if exists {
-		w.logger.Debug("skipping already exported block", "height", height)
-		return nil
+	if !exists {
+		return w.Process(height)
 	}
 
-	return w.Process(height)
+	parsedDataRow, err := w.db.GetBlockParsedData(height)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	p := NewBlockParsedDataFromDbRow(parsedDataRow)
+
+	if p.HasMissingData() {
+		err = w.ProcessMissingData(height, p)
+		if err := w.db.SaveBlockParsedData(p.toDbRow()); err != nil {
+			return err
+		}
+		return err
+	}
+	w.logger.Debug("skipping already exported block", "height", height)
+	return nil
+}
+
+func (w Worker) ProcessMissingData(height int64, p *BlockParsedData) error {
+	b, err := node.FetchBlock(height, w.node)
+	if err != nil {
+		return err
+	}
+
+	if !p.vals {
+		if err := w.SaveValidators(b.Vals.Validators); err != nil {
+			return err
+		}
+		p.vals = true
+	}
+
+	if !p.block {
+		if err := w.db.SaveBlock(types.NewBlockFromTmBlock(b.Block, sumGasTxs(b.Txs))); err != nil {
+			return err
+		}
+		p.block = true
+	}
+
+	if !p.commits {
+		if err := w.ExportCommit(b.Block.Block.LastCommit, b.Vals); err != nil {
+			return err
+		}
+		p.commits = true
+	}
+
+	if !p.allBlockModules {
+		w.processBlockModules(b.Block, b.Events, b.Txs, b.Vals, p)
+	}
+
+	txs := []*types.Tx{}
+	for _, tx := range b.Txs {
+		if !p.IsTxParsed(tx.TxHash) {
+			txs = append(txs, tx)
+		}
+	}
+
+	return w.ExportTxs(txs, p)
 }
 
 // Process fetches  a block for a given height and associated metadata and export it to a database.
@@ -110,43 +166,18 @@ func (w Worker) Process(height int64) error {
 
 	w.logger.Debug("processing block", "height", height)
 
-	block, err := w.node.Block(height)
+	b, err := node.FetchBlock(height, w.node)
 	if err != nil {
-		return fmt.Errorf("failed to get block from node: %s", err)
+		return err
 	}
 
-	events, err := w.node.BlockResults(height)
-	if err != nil {
-		return fmt.Errorf("failed to get block results from node: %s", err)
+	p, err := w.ExportBlock(b.Block, b.Events, b.Txs, b.Vals)
+
+	if err := w.db.SaveBlockParsedData(p.toDbRow()); err != nil {
+		return err
 	}
 
-	txs, err := w.node.Txs(block)
-	if err != nil {
-		return fmt.Errorf("failed to get transactions for block: %s", err)
-	}
-
-	vals, err := w.node.Validators(height)
-	if err != nil {
-		return fmt.Errorf("failed to get validators for block: %s", err)
-	}
-
-	return w.ExportBlock(block, events, txs, vals)
-}
-
-// ProcessTransactions fetches transactions for a given height and stores them into the database.
-// It returns an error if the export process fails.
-func (w Worker) ProcessTransactions(height int64) error {
-	block, err := w.node.Block(height)
-	if err != nil {
-		return fmt.Errorf("failed to get block from node: %s", err)
-	}
-
-	txs, err := w.node.Txs(block)
-	if err != nil {
-		return fmt.Errorf("failed to get transactions for block: %s", err)
-	}
-
-	return w.ExportTxs(txs)
+	return err
 }
 
 // HandleGenesis accepts a GenesisDoc and calls all the registered genesis handlers
@@ -193,44 +224,60 @@ func (w Worker) SaveValidators(vals []*tmtypes.Validator) error {
 // is returned if the write fails.
 func (w Worker) ExportBlock(
 	b *tmctypes.ResultBlock, r *tmctypes.ResultBlockResults, txs []*types.Tx, vals *tmctypes.ResultValidators,
-) error {
+) (*BlockParsedData, error) {
+	// todo here for some reason gets assigned 0 during test
+	p := BlockParsedData{height: b.Block.Height}
 	// Save all validators
 	err := w.SaveValidators(vals.Validators)
 	if err != nil {
-		return err
+		return &p, err
 	}
+	p.vals = true
 
 	// Make sure the proposer exists
 	proposerAddr := sdk.ConsAddress(b.Block.ProposerAddress)
 	val := findValidatorByAddr(proposerAddr.String(), vals)
 	if val == nil {
-		return fmt.Errorf("failed to find validator by proposer address %s: %s", proposerAddr.String(), err)
+		return &p, fmt.Errorf("failed to find validator by proposer address %s: %s", proposerAddr.String(), err)
 	}
 
 	// Save the block
 	err = w.db.SaveBlock(types.NewBlockFromTmBlock(b, sumGasTxs(txs)))
 	if err != nil {
-		return fmt.Errorf("failed to persist block: %s", err)
+		return &p, fmt.Errorf("failed to persist block: %s", err)
 	}
+	p.block = true
 
 	// Save the commits
 	err = w.ExportCommit(b.Block.LastCommit, vals)
 	if err != nil {
-		return err
+		return &p, err
 	}
+	p.commits = true
 
-	// Call the block handlers
+	w.processBlockModules(b, r, txs, vals, &p)
+
+	// Export the transactions
+	err = w.ExportTxs(txs, &p)
+	return &p, err
+}
+
+// Calls the block handlers
+func (w Worker) processBlockModules(
+	b *tmctypes.ResultBlock, r *tmctypes.ResultBlockResults, t []*types.Tx, v *tmctypes.ResultValidators, p *BlockParsedData,
+) {
+	p.allBlockModules = true
 	for _, module := range w.modules {
-		if blockModule, ok := module.(modules.BlockModule); ok {
-			err = blockModule.HandleBlock(b, r, txs, vals)
+		if blockModule, ok := module.(modules.BlockModule); ok && !p.IsBlockModuleParsed(module.Name()) {
+			err := blockModule.HandleBlock(b, r, t, v)
 			if err != nil {
 				w.logger.BlockError(module, b, err)
+				p.allBlockModules = false
+			} else {
+				p.blockModules = append(p.blockModules, module.Name())
 			}
 		}
 	}
-
-	// Export the transactions
-	return w.ExportTxs(txs)
 }
 
 // ExportCommit accepts a block commitment and a corresponding set of
@@ -269,6 +316,8 @@ func (w Worker) ExportCommit(commit *tmtypes.Commit, vals *tmctypes.ResultValida
 
 // saveTx accepts the transaction and persists it inside the database.
 // An error is returned if the write fails.
+//
+//nolint:unused
 func (w Worker) saveTx(tx *types.Tx) error {
 	err := w.db.SaveTx(tx)
 	if err != nil {
@@ -278,6 +327,8 @@ func (w Worker) saveTx(tx *types.Tx) error {
 }
 
 // handleTx accepts the transaction and calls the tx handlers.
+//
+//nolint:unused
 func (w Worker) handleTx(tx *types.Tx) {
 	// Call the tx handlers
 	for _, module := range w.modules {
@@ -292,6 +343,8 @@ func (w Worker) handleTx(tx *types.Tx) {
 
 // handleMessage accepts the transaction and handles messages contained
 // inside the transaction.
+//
+//nolint:unused
 func (w Worker) handleMessage(index int, msg sdk.Msg, tx *types.Tx) {
 	// Allow modules to handle the message
 	for _, module := range w.modules {
@@ -326,43 +379,54 @@ func (w Worker) handleMessage(index int, msg sdk.Msg, tx *types.Tx) {
 
 // ExportTxs accepts a slice of transactions and persists then inside the database.
 // An error is returned if the write fails.
-func (w Worker) ExportTxs(txs []*types.Tx) error {
-	// handle all transactions inside the block
+func (w Worker) ExportTxs(txs []*types.Tx, p *BlockParsedData) error {
+	p.allTxs = true
+	// Handle all the transactions inside the block
+mainloop:
 	for _, tx := range txs {
-		// save the transaction
-		err := w.saveTx(tx)
+		// Save the transaction itself
+		err := w.db.SaveTx(tx)
 		if err != nil {
-			return fmt.Errorf("error while storing txs: %s", err)
+			w.logger.Error(fmt.Sprintf("failed to handle transaction with hash %s: %s", tx.TxHash, err))
+			p.allTxs = false
+			continue
 		}
 
-		// call the tx handlers
-		w.handleTx(tx)
+		// Call the tx handlers
+		for _, module := range w.modules {
+			if transactionModule, ok := module.(modules.TransactionModule); ok {
+				err = transactionModule.HandleTx(tx)
+				if err != nil {
+					w.logger.TxError(module, tx, err)
+					p.allTxs = false
+					continue mainloop
+				}
+			}
+		}
 
-		// handle all messages contained inside the transaction
-		sdkMsgs := make([]sdk.Msg, len(tx.Body.Messages))
+		// Handle all the messages contained inside the transaction
 		for i, msg := range tx.Body.Messages {
 			var stdMsg sdk.Msg
-			err := w.codec.UnpackAny(msg, &stdMsg)
+			err = w.codec.UnpackAny(msg, &stdMsg)
 			if err != nil {
-				return err
+				w.logger.Error(fmt.Sprintf("error while unpacking message: %s", err))
+				p.allTxs = false
+				continue mainloop
 			}
-			sdkMsgs[i] = stdMsg
+
+			// Call the handlers
+			for _, module := range w.modules {
+				if messageModule, ok := module.(modules.MessageModule); ok {
+					err = messageModule.HandleMsg(i, stdMsg, tx)
+					if err != nil {
+						w.logger.MsgError(module, tx, stdMsg, err)
+						p.allTxs = false
+						continue mainloop
+					}
+				}
+			}
 		}
-
-		// call the msg handlers
-		for i, sdkMsg := range sdkMsgs {
-			w.handleMessage(i, sdkMsg, tx)
-		}
+		p.txs = append(p.txs, tx.TxHash)
 	}
-
-	totalBlocks := w.db.GetTotalBlocks()
-	logging.DbBlockCount.WithLabelValues("total_blocks_in_db").Set(float64(totalBlocks))
-
-	dbLatestHeight, err := w.db.GetLastBlockHeight()
-	if err != nil {
-		return err
-	}
-	logging.DbLatestHeight.WithLabelValues("db_latest_height").Set(float64(dbLatestHeight))
-
 	return nil
 }

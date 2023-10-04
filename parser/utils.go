@@ -1,10 +1,13 @@
 package parser
 
 import (
+	"strings"
+
 	tmctypes "github.com/cometbft/cometbft/rpc/core/types"
 	tmtypes "github.com/cometbft/cometbft/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/forbole/juno/v5/database"
 	"github.com/forbole/juno/v5/types"
 )
 
@@ -30,4 +33,74 @@ func sumGasTxs(txs []*types.Tx) uint64 {
 	}
 
 	return totalGas
+}
+
+// blockParsedData keeps track of parsed contents during block processing
+// it is then used to refetch missing data
+type BlockParsedData struct {
+	height          int64
+	txs             []string
+	blockModules    []string
+	vals            bool
+	block           bool
+	commits         bool
+	allTxs          bool
+	allBlockModules bool
+}
+
+func NewBlockParsedDataFromDbRow(t *database.BlockParsedDataRow) *BlockParsedData {
+	txsUnparsed := []string{}
+	if t.Txs != "" {
+		txsUnparsed = strings.Split(t.Txs, ",")
+	}
+	blockModulesUnparsed := []string{}
+	if t.BlockModules != "" {
+		blockModulesUnparsed = strings.Split(t.BlockModules, ",")
+	}
+
+	return &BlockParsedData{
+		height:          t.Height,
+		vals:            t.Validators,
+		block:           t.Block,
+		commits:         t.Commits,
+		txs:             txsUnparsed,
+		allTxs:          t.AllTxs,
+		blockModules:    blockModulesUnparsed,
+		allBlockModules: t.AllBlockModules,
+	}
+}
+
+func (b *BlockParsedData) HasMissingData() bool {
+	return !(b.vals && b.block && b.commits && b.allBlockModules && b.allTxs)
+}
+
+func (b *BlockParsedData) IsBlockModuleParsed(moduleName string) bool {
+	for _, m := range b.blockModules {
+		if m == moduleName {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *BlockParsedData) IsTxParsed(txHash string) bool {
+	for _, t := range b.txs {
+		if t == txHash {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *BlockParsedData) toDbRow() *database.BlockParsedDataRow {
+	return &database.BlockParsedDataRow{
+		Height:          b.height,
+		Validators:      b.vals,
+		Block:           b.block,
+		Commits:         b.commits,
+		Txs:             strings.Join(b.txs, ","),
+		AllTxs:          b.allTxs,
+		BlockModules:    strings.Join(b.blockModules, ","),
+		AllBlockModules: b.allBlockModules,
+	}
 }

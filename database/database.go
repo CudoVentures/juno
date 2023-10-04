@@ -29,6 +29,14 @@ type Database interface {
 	// NOTE. For each transaction inside txs, SaveTx will be called as well.
 	SaveBlock(block *types.Block) error
 
+	// SaveBlockParsedData will be called after a new block has been parsed,
+	// it keeps track of parsed data which is later used to
+	// process the missing data for old blocks
+	SaveBlockParsedData(p *BlockParsedDataRow) error
+
+	// GetBlockParsedData returns parse status for specific block
+	GetBlockParsedData(height int64) (*BlockParsedDataRow, error)
+
 	// GetTotalBlocks returns total number of blocks stored in database.
 	GetTotalBlocks() int64
 
