@@ -67,3 +67,6 @@ Contributions are welcome! Please open an Issues or Pull Request for any changes
 
 ## License
 [CCC0 1.0 Universal](https://creativecommons.org/share-your-work/public-domain/cc0/)
+
+## Cudos
+See [Changelog](CHANGELOG.md) for Cudos related changes

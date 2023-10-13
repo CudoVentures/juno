@@ -1,3 +1,8 @@
+## v5.0.0-Cudos
+### Changes
+- Forked from v5.0.0 tag
+- Updated max tx size do 32MB
+
 ## v5.0.0
 ### Changes
 - Updated Cosmos SDK to `v0.47.2`
