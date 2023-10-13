@@ -48,8 +48,8 @@ func CreateGrpcConnection(cfg *GRPCConfig) (*grpc.ClientConn, error) {
 		})))
 	}
 
-	// Set the max message size to 20MB
-	maxMsgSize := 1024 * 1024 * 20
+	// Set the max message size to 32MB
+	maxMsgSize := 1024 * 1024 * 32
 	grpcOpts = append(grpcOpts, grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxMsgSize), grpc.MaxCallSendMsgSize(maxMsgSize)))
 
 	address := HTTPProtocols.ReplaceAllString(cfg.Address, "")
