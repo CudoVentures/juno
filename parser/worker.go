@@ -28,8 +28,8 @@ import (
 // Worker defines a job consumer that is responsible for getting and
 // aggregating block and associated data and exporting it to a database.
 type Worker struct {
-	index       int
-	upgradeInfo types.UpgradeInfo
+	index                int
+	upgradeHeightReached bool
 
 	queue   types.HeightQueue
 	codec   codec.Codec
@@ -43,14 +43,14 @@ type Worker struct {
 // NewWorker allows to create a new Worker implementation.
 func NewWorker(ctx *Context, queue types.HeightQueue, index int) Worker {
 	return Worker{
-		upgradeInfo: types.UpgradeInfo{},
-		index:       index,
-		codec:       ctx.EncodingConfig.Codec,
-		node:        ctx.Node,
-		queue:       queue,
-		db:          ctx.Database,
-		modules:     ctx.Modules,
-		logger:      ctx.Logger,
+		upgradeHeightReached: false,
+		index:                index,
+		codec:                ctx.EncodingConfig.Codec,
+		node:                 ctx.Node,
+		queue:                queue,
+		db:                   ctx.Database,
+		modules:              ctx.Modules,
+		logger:               ctx.Logger,
 	}
 }
 
@@ -111,8 +111,8 @@ func (w Worker) Process(height int64) error {
 	}
 
 	// Avoid getting further this line if upgrade height or afterwards
-	if w.upgradeInfo.UpgradeHeightReached || w.ShoulErrorOnUpgradeHeight(height) {
-		return fmt.Errorf("upgrade height at block %v reached. not processing block %v", w.upgradeInfo.UpgradeHeight, height)
+	if w.ShoulErrorOnUpgradeHeight(height) {
+		return fmt.Errorf("upgrade height reached. not processing block %v", height)
 	}
 
 	w.logger.Debug("processing block", "height", height)
@@ -144,8 +144,8 @@ func (w Worker) Process(height int64) error {
 // It returns an error if the export process fails.
 func (w Worker) ProcessTransactions(height int64) error {
 	// Avoid getting further this line if upgrade height or afterwards
-	if w.upgradeInfo.UpgradeHeightReached || w.ShoulErrorOnUpgradeHeight(height) {
-		return fmt.Errorf("upgrade height at block %v reached. not processing block %v", w.upgradeInfo.UpgradeHeight, height)
+	if w.ShoulErrorOnUpgradeHeight(height) {
+		return fmt.Errorf("upgrade height reached. not processing block %v", height)
 	}
 
 	block, err := w.node.Block(height)
@@ -380,16 +380,14 @@ func (w Worker) ExportTxs(txs []*types.Tx) error {
 }
 
 func (w *Worker) ShoulErrorOnUpgradeHeight(currentHeight int64) bool {
-	upgradeHeightReached, err := w.db.CheckSoftwareUpgradePlan(currentHeight)
-	if err != nil {
-		w.logger.Debug("CheckSoftwareUpgradePlan", "err", err)
-		return false
+	if !w.upgradeHeightReached {
+		upgradeHeightReached, err := w.db.CheckSoftwareUpgradePlan(currentHeight)
+		if err != nil {
+			w.logger.Debug("CheckSoftwareUpgradePlan", "err", err)
+			w.upgradeHeightReached = false
+		} else {
+			w.upgradeHeightReached = upgradeHeightReached
+		}
 	}
-
-	if upgradeHeightReached {
-		w.upgradeInfo.UpgradeHeight = currentHeight
-		w.upgradeInfo.UpgradeHeightReached = true
-	}
-
-	return upgradeHeightReached
+	return w.upgradeHeightReached
 }
