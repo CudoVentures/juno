@@ -112,6 +112,19 @@ func (db *Database) GetLastBlockHeight() (int64, error) {
 	return height, nil
 }
 
+// CheckSoftwareUpgradePlan returns true if an upgrade is scheduled at the given height
+func (db *Database) CheckSoftwareUpgradePlan(upgradeHeight int64) (bool, error) {
+	var exist bool
+
+	stmt := `SELECT EXISTS (SELECT 1 FROM software_upgrade_plan WHERE upgrade_height=$1)`
+	err := db.SQL.QueryRow(stmt, upgradeHeight).Scan(&exist)
+	if err != nil {
+		return exist, fmt.Errorf("error while checking software upgrade plan existence: %s", err)
+	}
+
+	return exist, nil
+}
+
 // GetMissingHeights returns a slice of missing block heights between startHeight and endHeight
 func (db *Database) GetMissingHeights(startHeight, endHeight int64) []int64 {
 	var result []int64

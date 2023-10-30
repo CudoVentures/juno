@@ -28,7 +28,8 @@ import (
 // Worker defines a job consumer that is responsible for getting and
 // aggregating block and associated data and exporting it to a database.
 type Worker struct {
-	index int
+	index       int
+	upgradeInfo types.UpgradeInfo
 
 	queue   types.HeightQueue
 	codec   codec.Codec
@@ -42,13 +43,14 @@ type Worker struct {
 // NewWorker allows to create a new Worker implementation.
 func NewWorker(ctx *Context, queue types.HeightQueue, index int) Worker {
 	return Worker{
-		index:   index,
-		codec:   ctx.EncodingConfig.Codec,
-		node:    ctx.Node,
-		queue:   queue,
-		db:      ctx.Database,
-		modules: ctx.Modules,
-		logger:  ctx.Logger,
+		upgradeInfo: types.UpgradeInfo{},
+		index:       index,
+		codec:       ctx.EncodingConfig.Codec,
+		node:        ctx.Node,
+		queue:       queue,
+		db:          ctx.Database,
+		modules:     ctx.Modules,
+		logger:      ctx.Logger,
 	}
 }
 
@@ -108,6 +110,11 @@ func (w Worker) Process(height int64) error {
 		return w.HandleGenesis(genesisDoc, genesisState)
 	}
 
+	// Avoid getting further this line if upgrade height or afterwards
+	if w.upgradeInfo.UpgradeHeightReached || w.ShoulErrorOnUpgradeHeight(height) {
+		return fmt.Errorf("upgrade height at block %v reached. not processing block %v", w.upgradeInfo.UpgradeHeight, height)
+	}
+
 	w.logger.Debug("processing block", "height", height)
 
 	block, err := w.node.Block(height)
@@ -136,6 +143,11 @@ func (w Worker) Process(height int64) error {
 // ProcessTransactions fetches transactions for a given height and stores them into the database.
 // It returns an error if the export process fails.
 func (w Worker) ProcessTransactions(height int64) error {
+	// Avoid getting further this line if upgrade height or afterwards
+	if w.upgradeInfo.UpgradeHeightReached || w.ShoulErrorOnUpgradeHeight(height) {
+		return fmt.Errorf("upgrade height at block %v reached. not processing block %v", w.upgradeInfo.UpgradeHeight, height)
+	}
+
 	block, err := w.node.Block(height)
 	if err != nil {
 		return fmt.Errorf("failed to get block from node: %s", err)
@@ -365,4 +377,19 @@ func (w Worker) ExportTxs(txs []*types.Tx) error {
 	logging.DbLatestHeight.WithLabelValues("db_latest_height").Set(float64(dbLatestHeight))
 
 	return nil
+}
+
+func (w *Worker) ShoulErrorOnUpgradeHeight(currentHeight int64) bool {
+	upgradeHeightReached, err := w.db.CheckSoftwareUpgradePlan(currentHeight)
+	if err != nil {
+		w.logger.Debug("CheckSoftwareUpgradePlan", "err", err)
+		return false
+	}
+
+	if upgradeHeightReached {
+		w.upgradeInfo.UpgradeHeight = currentHeight
+		w.upgradeInfo.UpgradeHeightReached = true
+	}
+
+	return upgradeHeightReached
 }
