@@ -116,7 +116,7 @@ func (db *Database) GetLastBlockHeight() (int64, error) {
 func (db *Database) CheckSoftwareUpgradePlan(upgradeHeight int64) (bool, error) {
 	var exist bool
 
-	stmt := `SELECT EXISTS (SELECT 1 FROM software_upgrade_plan WHERE upgrade_height=$1)`
+	stmt := `SELECT EXISTS (SELECT 1 FROM software_upgrade_plan WHERE upgrade_height <= $1)`
 	err := db.SQL.QueryRow(stmt, upgradeHeight).Scan(&exist)
 	if err != nil {
 		return exist, fmt.Errorf("error while checking software upgrade plan existence: %s", err)

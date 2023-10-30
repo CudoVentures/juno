@@ -3,6 +3,8 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cosmos/cosmos-sdk/x/authz"
@@ -25,11 +27,12 @@ import (
 	"github.com/forbole/juno/v5/types/utils"
 )
 
-// Worker defines a job consumer that is responsible for getting and
+// *Worker defines a job consumer that is responsible for getting and
 // aggregating block and associated data and exporting it to a database.
 type Worker struct {
 	index                int
-	upgradeHeightReached bool
+	upgradeHeightReached atomic.Bool
+	upgradeHeightMutex   sync.Mutex
 
 	queue   types.HeightQueue
 	codec   codec.Codec
@@ -40,10 +43,10 @@ type Worker struct {
 	logger logging.Logger
 }
 
-// NewWorker allows to create a new Worker implementation.
+// NewWorker allows to create a new *Worker implementation.
 func NewWorker(ctx *Context, queue types.HeightQueue, index int) Worker {
 	return Worker{
-		upgradeHeightReached: false,
+		upgradeHeightReached: atomic.Bool{},
 		index:                index,
 		codec:                ctx.EncodingConfig.Codec,
 		node:                 ctx.Node,
@@ -56,7 +59,7 @@ func NewWorker(ctx *Context, queue types.HeightQueue, index int) Worker {
 
 // Start starts a worker by listening for new jobs (block heights) from the
 // given worker queue. Any failed job is logged and re-enqueued.
-func (w Worker) Start() {
+func (w *Worker) Start() {
 	logging.WorkerCount.Inc()
 	chainID, err := w.node.ChainID()
 	if err != nil {
@@ -82,7 +85,7 @@ func (w Worker) Start() {
 // ProcessIfNotExists defines the job consumer workflow. It will fetch a block for a given
 // height and associated metadata and export it to a database if it does not exist yet. It returns an
 // error if any export process fails.
-func (w Worker) ProcessIfNotExists(height int64) error {
+func (w *Worker) ProcessIfNotExists(height int64) error {
 	exists, err := w.db.HasBlock(height)
 	if err != nil {
 		return fmt.Errorf("error while searching for block: %s", err)
@@ -98,7 +101,7 @@ func (w Worker) ProcessIfNotExists(height int64) error {
 
 // Process fetches  a block for a given height and associated metadata and export it to a database.
 // It returns an error if any export process fails.
-func (w Worker) Process(height int64) error {
+func (w *Worker) Process(height int64) error {
 	if height == 0 {
 		cfg := config.Cfg.Parser
 
@@ -111,7 +114,7 @@ func (w Worker) Process(height int64) error {
 	}
 
 	// Avoid getting further this line if upgrade height or afterwards
-	if w.ShoulErrorOnUpgradeHeight(height) {
+	if w.ShouldErrorOnUpgradeHeight(height) {
 		return fmt.Errorf("upgrade height reached. not processing block %v", height)
 	}
 
@@ -142,9 +145,9 @@ func (w Worker) Process(height int64) error {
 
 // ProcessTransactions fetches transactions for a given height and stores them into the database.
 // It returns an error if the export process fails.
-func (w Worker) ProcessTransactions(height int64) error {
+func (w *Worker) ProcessTransactions(height int64) error {
 	// Avoid getting further this line if upgrade height or afterwards
-	if w.ShoulErrorOnUpgradeHeight(height) {
+	if w.ShouldErrorOnUpgradeHeight(height) {
 		return fmt.Errorf("upgrade height reached. not processing block %v", height)
 	}
 
@@ -163,7 +166,7 @@ func (w Worker) ProcessTransactions(height int64) error {
 
 // HandleGenesis accepts a GenesisDoc and calls all the registered genesis handlers
 // in the order in which they have been registered.
-func (w Worker) HandleGenesis(genesisDoc *tmtypes.GenesisDoc, appState map[string]json.RawMessage) error {
+func (w *Worker) HandleGenesis(genesisDoc *tmtypes.GenesisDoc, appState map[string]json.RawMessage) error {
 	// Call the genesis handlers
 	for _, module := range w.modules {
 		if genesisModule, ok := module.(modules.GenesisModule); ok {
@@ -179,7 +182,7 @@ func (w Worker) HandleGenesis(genesisDoc *tmtypes.GenesisDoc, appState map[strin
 // SaveValidators persists a list of Tendermint validators with an address and a
 // consensus public key. An error is returned if the public key cannot be Bech32
 // encoded or if the DB write fails.
-func (w Worker) SaveValidators(vals []*tmtypes.Validator) error {
+func (w *Worker) SaveValidators(vals []*tmtypes.Validator) error {
 	var validators = make([]*types.Validator, len(vals))
 	for index, val := range vals {
 		consAddr := sdk.ConsAddress(val.Address).String()
@@ -203,7 +206,7 @@ func (w Worker) SaveValidators(vals []*tmtypes.Validator) error {
 // ExportBlock accepts a finalized block and a corresponding set of transactions
 // and persists them to the database along with attributable metadata. An error
 // is returned if the write fails.
-func (w Worker) ExportBlock(
+func (w *Worker) ExportBlock(
 	b *tmctypes.ResultBlock, r *tmctypes.ResultBlockResults, txs []*types.Tx, vals *tmctypes.ResultValidators,
 ) error {
 	// Save all validators
@@ -248,7 +251,7 @@ func (w Worker) ExportBlock(
 // ExportCommit accepts a block commitment and a corresponding set of
 // validators for the commitment and persists them to the database. An error is
 // returned if any write fails or if there is any missing aggregated data.
-func (w Worker) ExportCommit(commit *tmtypes.Commit, vals *tmctypes.ResultValidators) error {
+func (w *Worker) ExportCommit(commit *tmtypes.Commit, vals *tmctypes.ResultValidators) error {
 	var signatures []*types.CommitSig
 	for _, commitSig := range commit.Signatures {
 		// Avoid empty commits
@@ -281,7 +284,7 @@ func (w Worker) ExportCommit(commit *tmtypes.Commit, vals *tmctypes.ResultValida
 
 // saveTx accepts the transaction and persists it inside the database.
 // An error is returned if the write fails.
-func (w Worker) saveTx(tx *types.Tx) error {
+func (w *Worker) saveTx(tx *types.Tx) error {
 	err := w.db.SaveTx(tx)
 	if err != nil {
 		return fmt.Errorf("failed to handle transaction with hash %s: %s", tx.TxHash, err)
@@ -290,7 +293,7 @@ func (w Worker) saveTx(tx *types.Tx) error {
 }
 
 // handleTx accepts the transaction and calls the tx handlers.
-func (w Worker) handleTx(tx *types.Tx) {
+func (w *Worker) handleTx(tx *types.Tx) {
 	// Call the tx handlers
 	for _, module := range w.modules {
 		if transactionModule, ok := module.(modules.TransactionModule); ok {
@@ -304,7 +307,7 @@ func (w Worker) handleTx(tx *types.Tx) {
 
 // handleMessage accepts the transaction and handles messages contained
 // inside the transaction.
-func (w Worker) handleMessage(index int, msg sdk.Msg, tx *types.Tx) {
+func (w *Worker) handleMessage(index int, msg sdk.Msg, tx *types.Tx) {
 	// Allow modules to handle the message
 	for _, module := range w.modules {
 		if messageModule, ok := module.(modules.MessageModule); ok {
@@ -338,7 +341,7 @@ func (w Worker) handleMessage(index int, msg sdk.Msg, tx *types.Tx) {
 
 // ExportTxs accepts a slice of transactions and persists then inside the database.
 // An error is returned if the write fails.
-func (w Worker) ExportTxs(txs []*types.Tx) error {
+func (w *Worker) ExportTxs(txs []*types.Tx) error {
 	// handle all transactions inside the block
 	for _, tx := range txs {
 		// save the transaction
@@ -379,15 +382,23 @@ func (w Worker) ExportTxs(txs []*types.Tx) error {
 	return nil
 }
 
-func (w *Worker) ShoulErrorOnUpgradeHeight(currentHeight int64) bool {
-	if !w.upgradeHeightReached {
+// double-checked locking
+func (w *Worker) ShouldErrorOnUpgradeHeight(currentHeight int64) bool {
+
+	if w.upgradeHeightReached.Load() {
+		return true
+	}
+
+	w.upgradeHeightMutex.Lock()
+	defer w.upgradeHeightMutex.Unlock()
+
+	if !w.upgradeHeightReached.Load() {
 		upgradeHeightReached, err := w.db.CheckSoftwareUpgradePlan(currentHeight)
 		if err != nil {
 			w.logger.Debug("CheckSoftwareUpgradePlan", "err", err)
-			w.upgradeHeightReached = false
-		} else {
-			w.upgradeHeightReached = upgradeHeightReached
 		}
+		w.upgradeHeightReached.Store(upgradeHeightReached)
 	}
-	return w.upgradeHeightReached
+
+	return w.upgradeHeightReached.Load()
 }
