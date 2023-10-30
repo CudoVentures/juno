@@ -113,11 +113,11 @@ func (db *Database) GetLastBlockHeight() (int64, error) {
 }
 
 // CheckSoftwareUpgradePlan returns true if an upgrade is scheduled at the given height
-func (db *Database) CheckSoftwareUpgradePlan(upgradeHeight int64) (bool, error) {
+func (db *Database) CheckSoftwareUpgradePlan(upgradeHeight int64, lastUpgradeHeight int64) (bool, error) {
 	var exist bool
 
-	stmt := `SELECT EXISTS (SELECT 1 FROM software_upgrade_plan WHERE upgrade_height <= $1)`
-	err := db.SQL.QueryRow(stmt, upgradeHeight).Scan(&exist)
+	stmt := `SELECT EXISTS (SELECT 1 FROM software_upgrade_plan WHERE upgrade_height <= $1 AND upgrade_height > $2)`
+	err := db.SQL.QueryRow(stmt, upgradeHeight, lastUpgradeHeight).Scan(&exist)
 	if err != nil {
 		return exist, fmt.Errorf("error while checking software upgrade plan existence: %s", err)
 	}

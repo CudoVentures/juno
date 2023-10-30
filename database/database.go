@@ -21,7 +21,7 @@ type Database interface {
 	GetLastBlockHeight() (int64, error)
 
 	// CheckSoftwareUpgradePlan returns true if an upgrade is scheduled at the given height
-	CheckSoftwareUpgradePlan(upgradeHeight int64) (bool, error)
+	CheckSoftwareUpgradePlan(upgradeHeight int64, lastUpgradeHeight int64) (bool, error)
 
 	// GetMissingHeights returns a slice of missing block heights between startHeight and endHeight
 	GetMissingHeights(startHeight, endHeight int64) []int64

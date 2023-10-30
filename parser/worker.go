@@ -384,6 +384,12 @@ func (w *Worker) ExportTxs(txs []*types.Tx) error {
 
 // double-checked locking
 func (w *Worker) ShouldErrorOnUpgradeHeight(currentHeight int64) bool {
+	cfg := config.Cfg.Parser
+	lastUpgradeHeight := cfg.LastUpgradeHeight
+
+	if currentHeight <= lastUpgradeHeight {
+		return false
+	}
 
 	if w.upgradeHeightReached.Load() {
 		return true
@@ -393,7 +399,7 @@ func (w *Worker) ShouldErrorOnUpgradeHeight(currentHeight int64) bool {
 	defer w.upgradeHeightMutex.Unlock()
 
 	if !w.upgradeHeightReached.Load() {
-		upgradeHeightReached, err := w.db.CheckSoftwareUpgradePlan(currentHeight)
+		upgradeHeightReached, err := w.db.CheckSoftwareUpgradePlan(currentHeight, lastUpgradeHeight)
 		if err != nil {
 			w.logger.Debug("CheckSoftwareUpgradePlan", "err", err)
 		}
