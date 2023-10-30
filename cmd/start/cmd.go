@@ -92,9 +92,9 @@ func startParsing(ctx *parser.Context) error {
 
 	// Start each blocking worker in a go-routine where the worker consumes jobs
 	// off of the export queue.
-	for i, w := range workers {
+	for i := range workers {
 		ctx.Logger.Debug("starting worker...", "number", i+1)
-		go w.Start()
+		go workers[i].Start()
 	}
 
 	// Listen for and trap any OS signal to gracefully shutdown and exit
