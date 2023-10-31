@@ -22,3 +22,7 @@ func GetAvgBlockTime() time.Duration {
 	}
 	return *Cfg.Parser.AvgBlockTime
 }
+
+func GetLastUpgradeHeight() int64 {
+	return Cfg.Parser.LastUpgradeHeight
+}
